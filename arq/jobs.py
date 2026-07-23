@@ -5,7 +5,7 @@ import warnings
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
-from typing import Any, Callable, Optional
+from typing import Any, Callable, Optional, cast
 
 from redis.asyncio import Redis
 
@@ -73,7 +73,7 @@ class Job:
     def __init__(
         self,
         job_id: str,
-        redis: 'Redis[bytes]',
+        redis: 'Redis',
         _queue_name: str = default_queue_name,
         _deserializer: Optional[Deserializer] = None,
     ):
@@ -132,7 +132,7 @@ class Job:
         if not info:
             v = await self._redis.get(job_key_prefix + self.job_id)
             if v:
-                info = deserialize_job(v, deserializer=self._deserializer)
+                info = deserialize_job(cast(bytes, v), deserializer=self._deserializer)
         if info:
             s = await self._redis.zscore(self._queue_name, self.job_id)
             info.score = None if s is None else int(s)
@@ -145,7 +145,7 @@ class Job:
         """
         v = await self._redis.get(result_key_prefix + self.job_id)
         if v:
-            return deserialize_result(v, deserializer=self._deserializer)
+            return deserialize_result(cast(bytes, v), deserializer=self._deserializer)
         else:
             return None
 

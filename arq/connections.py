@@ -4,7 +4,7 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from operator import attrgetter
-from typing import TYPE_CHECKING, Any, Callable, Optional, Union, cast
+from typing import Any, Callable, Optional, Union, cast
 from urllib.parse import parse_qs, urlparse
 from uuid import uuid4
 
@@ -80,10 +80,7 @@ class RedisSettings:
         return 'RedisSettings({})'.format(', '.join(f'{k}={v!r}' for k, v in self.__dict__.items()))
 
 
-if TYPE_CHECKING:
-    BaseRedis = Redis[bytes]
-else:
-    BaseRedis = Redis
+BaseRedis = Redis
 
 
 class ArqRedis(BaseRedis):
@@ -156,7 +153,7 @@ class ArqRedis(BaseRedis):
         async with self.pipeline(transaction=True) as pipe:
             await pipe.watch(job_key)
             if await pipe.exists(job_key, result_key_prefix + job_id):
-                await pipe.reset()
+                await pipe.reset()  # type: ignore[no-untyped-call]
                 return None
 
             enqueue_time_ms = timestamp_ms()
@@ -170,7 +167,7 @@ class ArqRedis(BaseRedis):
             expires_ms = expires_ms or score - enqueue_time_ms + self.expires_extra_ms
 
             job = serialize_job(function, args, kwargs, _job_try, enqueue_time_ms, serializer=self.job_serializer)
-            pipe.multi()
+            pipe.multi()  # type: ignore[no-untyped-call]
             pipe.psetex(job_key, expires_ms, job)
             pipe.zadd(_queue_name, {job_id: score})
             try:
@@ -193,7 +190,7 @@ class ArqRedis(BaseRedis):
         """
         Get results for all jobs in redis.
         """
-        keys = await self.keys(result_key_prefix + '*')
+        keys = cast('list[bytes]', await self.keys(result_key_prefix + '*'))
         results = await asyncio.gather(*[self._get_job_result(k) for k in keys])
         return sorted(results, key=attrgetter('enqueue_time'))
 
@@ -202,7 +199,7 @@ class ArqRedis(BaseRedis):
         v = await self.get(key)
         if v is None:
             raise RuntimeError(f'job "{key}" not found')
-        jd = deserialize_job(v, deserializer=self.job_deserializer)
+        jd = deserialize_job(cast(bytes, v), deserializer=self.job_deserializer)
         jd.score = score
         jd.job_id = job_id.decode()
         return jd
@@ -213,7 +210,7 @@ class ArqRedis(BaseRedis):
         """
         if queue_name is None:
             queue_name = self.default_queue_name
-        jobs = await self.zrange(queue_name, withscores=True, start=0, end=-1)
+        jobs = cast('list[tuple[bytes, float]]', await self.zrange(queue_name, withscores=True, start=0, end=-1))
         return await asyncio.gather(*[self._get_job_def(job_id, int(score)) for job_id, score in jobs])
 
 
@@ -239,7 +236,7 @@ async def create_pool(
     if settings.sentinel:
 
         def pool_factory(*args: Any, **kwargs: Any) -> ArqRedis:
-            client = Sentinel(  # type: ignore[misc]
+            client = Sentinel(  # type: ignore[misc,no-untyped-call]
                 *args,
                 sentinels=settings.host,
                 ssl=settings.ssl,
@@ -249,8 +246,7 @@ async def create_pool(
             return cast(ArqRedis, redis)
 
     else:
-        pool_factory = functools.partial(
-            ArqRedis,
+        redis_kwargs: dict[str, Any] = dict(
             host=settings.host,
             port=settings.port,
             unix_socket_path=settings.unix_socket_path,
@@ -263,10 +259,14 @@ async def create_pool(
             ssl_ca_data=settings.ssl_ca_data,
             ssl_check_hostname=settings.ssl_check_hostname,
             retry=settings.retry,
-            retry_on_timeout=settings.retry_on_timeout,
             retry_on_error=settings.retry_on_error,
             max_connections=settings.max_connections,
         )
+        if settings.retry_on_timeout:
+            # redis-py >= 6.0 deprecates `retry_on_timeout`, warning whenever it's passed at all,
+            # so only pass it through when actually enabled to avoid the warning in the default case.
+            redis_kwargs['retry_on_timeout'] = True
+        pool_factory = functools.partial(ArqRedis, **redis_kwargs)
 
     while True:
         try:
@@ -299,7 +299,7 @@ async def create_pool(
             return pool
 
 
-async def log_redis_info(redis: 'Redis[bytes]', log_func: Callable[[str], Any]) -> None:
+async def log_redis_info(redis: 'Redis', log_func: Callable[[str], Any]) -> None:
     async with redis.pipeline(transaction=False) as pipe:
         pipe.info(section='Server')
         pipe.info(section='Memory')

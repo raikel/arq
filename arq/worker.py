@@ -388,8 +388,11 @@ class Worker:
         if self.allow_pick_jobs:
             if self.job_counter < self.max_jobs:
                 now = timestamp_ms()
-                job_ids = await self.pool.zrangebyscore(
-                    self.queue_name, min=float('-inf'), start=self._queue_read_offset, num=count, max=now
+                job_ids = cast(
+                    'list[bytes]',
+                    await self.pool.zrangebyscore(
+                        self.queue_name, min=float('-inf'), start=self._queue_read_offset, num=count, max=now
+                    ),
                 )
 
                 await self.start_jobs(job_ids)
@@ -461,7 +464,7 @@ class Worker:
                     logger.debug('job %s already running elsewhere', job_id)
                     continue
 
-                pipe.multi()
+                pipe.multi()  # type: ignore[no-untyped-call]
                 pipe.psetex(in_progress_key, int(self.in_progress_timeout_s * 1000), b'1')
                 try:
                     await pipe.execute()
@@ -544,7 +547,7 @@ class Worker:
 
         if enqueue_job_try and enqueue_job_try > job_try:
             job_try = enqueue_job_try
-            await self.pool.setex(retry_key_prefix + job_id, 88400, str(job_try))
+            await self.pool.set(retry_key_prefix + job_id, str(job_try), ex=88400)
 
         max_tries = self.max_tries if function.max_tries is None else function.max_tries
         if job_try > max_tries:
@@ -781,9 +784,7 @@ class Worker:
             f'{datetime.now():%b-%d %H:%M:%S} j_complete={self.jobs_complete} j_failed={self.jobs_failed} '
             f'j_retried={self.jobs_retried} j_ongoing={pending_tasks} queued={queued}'
         )
-        await self.pool.psetex(  # type: ignore[no-untyped-call]
-            self.health_check_key, int((self.health_check_interval + 1) * 1000), info.encode()
-        )
+        await self.pool.psetex(self.health_check_key, int((self.health_check_interval + 1) * 1000), info.encode())
         log_suffix = info[info.index('j_complete=') :]
         if self._last_health_check_log and log_suffix != self._last_health_check_log:
             logger.info('recording health: %s', info)
@@ -874,7 +875,7 @@ class Worker:
         await self.pool.delete(self.health_check_key)
         if self.on_shutdown:
             await self.on_shutdown(self.ctx)
-        await self.pool.close(close_connection_pool=True)
+        await self.pool.aclose(close_connection_pool=True)
         self._pool = None
 
     def __repr__(self) -> str:
@@ -915,7 +916,7 @@ async def async_check_health(
     else:
         logger.info('Health check successful: %s', data)
         r = 0
-    await redis.close(close_connection_pool=True)
+    await redis.aclose(close_connection_pool=True)
     return r
 
 
