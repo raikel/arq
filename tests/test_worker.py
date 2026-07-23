@@ -1081,7 +1081,7 @@ async def test_worker_retry(mocker, worker_retry, exception_thrown):
     await worker._poll_iteration()
 
     # spy method handling call_with_retry failure
-    spy = mocker.spy(worker.pool, '_disconnect_raise')
+    spy = mocker.spy(worker.pool, '_close_connection')
 
     try:
         # start patch
@@ -1091,7 +1091,7 @@ async def test_worker_retry(mocker, worker_retry, exception_thrown):
         with pytest.raises(type(exception_thrown)):
             await worker._poll_iteration()
 
-        # assert retry counts and no exception thrown during '_disconnect_raise'
+        # assert retry counts and no exception thrown during '_close_connection'
         assert spy.call_count == 4  # retries setting + 1
         assert spy.spy_exception is None
 
@@ -1119,19 +1119,19 @@ async def test_worker_crash(mocker, worker, exception_thrown):
     await worker._poll_iteration()
 
     # spy method handling call_with_retry failure
-    spy = mocker.spy(worker.pool, '_disconnect_raise')
+    spy = mocker.spy(worker.pool, '_close_connection')
 
     try:
         # start patch
         p.start()
 
         # assert exception thrown
-        with pytest.raises(type(exception_thrown)):
+        with pytest.raises(type(exception_thrown)) as exc_info:
             await worker._poll_iteration()
 
-        # assert no retry counts and exception thrown during '_disconnect_raise'
+        # assert no retry counts, and the original exception propagates unchanged
         assert spy.call_count == 1
-        assert spy.spy_exception == exception_thrown
+        assert exc_info.value is exception_thrown
 
     finally:
         # stop patch to allow worker cleanup

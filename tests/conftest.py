@@ -52,13 +52,16 @@ async def arq_redis(test_redis_host: str, test_redis_port: int):
         host=test_redis_host,
         port=test_redis_port,
         encoding='utf-8',
+        # redis-py >= 6.0 defaults to retrying failed commands up to 10 times; arq's own
+        # default (via RedisSettings/create_pool) is not to retry, so match that here.
+        retry=None,
     )
 
     await redis_.flushall()
 
     yield redis_
 
-    await redis_.close(close_connection_pool=True)
+    await redis_.aclose(close_connection_pool=True)
 
 
 @pytest.fixture
@@ -72,7 +75,7 @@ async def arq_redis_msgpack(test_redis_host: str, test_redis_port: int):
     )
     await redis_.flushall()
     yield redis_
-    await redis_.close(close_connection_pool=True)
+    await redis_.aclose(close_connection_pool=True)
 
 
 @pytest.fixture
@@ -82,12 +85,11 @@ async def arq_redis_retry(test_redis_host: str, test_redis_port: int):
         port=test_redis_port,
         encoding='utf-8',
         retry=Retry(backoff=NoBackoff(), retries=3),
-        retry_on_timeout=True,
-        retry_on_error=[redis.exceptions.ConnectionError],
+        retry_on_error=[redis.exceptions.ConnectionError, redis.exceptions.TimeoutError],
     )
     await redis_.flushall()
     yield redis_
-    await redis_.close(close_connection_pool=True)
+    await redis_.aclose(close_connection_pool=True)
 
 
 @pytest.fixture
@@ -140,7 +142,7 @@ async def fix_create_pool(loop):
 
     yield create_pool_
 
-    await asyncio.gather(*[p.close(close_connection_pool=True) for p in pools])
+    await asyncio.gather(*[p.aclose(close_connection_pool=True) for p in pools])
 
 
 @pytest.fixture(name='cancel_remaining_task')
